@@ -1,0 +1,10 @@
+[
+  {"id":"c1","name":"Glurak","set":"Basis-Set","nr":"4/102","rarity":"Holo Rare","bild":"assets/karten/c1.svg","basisPreis":289.90},
+  {"id":"c2","name":"Bisaflor","set":"Basis-Set","nr":"15/102","rarity":"Holo Rare","bild":"assets/karten/c2.svg","basisPreis":149.95},
+  {"id":"c3","name":"Turtok","set":"Basis-Set","nr":"2/102","rarity":"Holo Rare","bild":"assets/karten/c3.svg","basisPreis":189.50},
+  {"id":"c4","name":"Pikachu","set":"Promo","nr":"PROMO","rarity":"Promo","bild":"assets/karten/c4.svg","basisPreis":42.00},
+  {"id":"c5","name":"Mewtwo","set":"Basis-Set","nr":"10/102","rarity":"Holo Rare","bild":"assets/karten/c5.svg","basisPreis":320.00},
+  {"id":"c6","name":"Relaxo","set":"Fossil","nr":"27/62","rarity":"Holo Rare","bild":"assets/karten/c6.svg","basisPreis":75.00},
+  {"id":"c7","name":"Arkani","set":"Dschungel","nr":"20/64","rarity":"Holo Rare","bild":"assets/karten/c7.svg","basisPreis":95.00},
+  {"id":"c8","name":"Dragoran","set":"Fossil","nr":"4/62","rarity":"Holo Rare","bild":"assets/karten/c8.svg","basisPreis":210.00}
+]
