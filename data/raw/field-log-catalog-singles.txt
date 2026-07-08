@@ -1,0 +1,19 @@
+Erkannte Felder (2026-07-08):
+idProduct
+name
+idCategory
+categoryName
+idExpansion
+idMetacard
+dateAdded
+
+Beispiel-Eintrag:
+{
+  "idProduct": 273532,
+  "name": "Weedle [Multiply]",
+  "idCategory": 51,
+  "categoryName": "Pokémon Single",
+  "idExpansion": 1585,
+  "idMetacard": 340471,
+  "dateAdded": "0000-00-00 00:00:00"
+}
