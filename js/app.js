@@ -1,4 +1,9 @@
+// ── Provider-Wechsel ──────────────────────────────────────────────────────────
+// Phase 1 (Mock-Daten):
 import { MockProvider } from './datenquelle/mockProvider.js';
+// Phase 2 (echte CM-Daten) → Zeile unten einkommentieren + MockProvider-Zeile auskommentieren:
+// import { CardmarketFileProvider } from './datenquelle/cardmarketFileProvider.js';
+
 import { renderMenue } from './ui/menue.js';
 import { renderSuche } from './ui/suche.js';
 import { renderWatchlist } from './ui/watchlist.js';
@@ -6,15 +11,20 @@ import { renderEinstellungen } from './ui/einstellungen.js';
 import { renderAccount } from './ui/account.js';
 import { destroyChart } from './ui/chart.js';
 
-// === Provider singleton ===
+// === Provider singleton (Phase 1) ===
 export const provider = new MockProvider();
+// === Provider singleton (Phase 2) → aktivieren wenn CardmarketFileProvider importiert:
+// export const provider = new CardmarketFileProvider();
 
 // === Global state ===
 export const state = {
   view: 'suche',
   selectedKarteId: null,
-  sprache: 'DE',
-  zustand: 'NM',
+  // PHASE-3-REAKTIVIERUNG: sprache + zustand reaktivieren, sobald granulare API verfügbar
+  // sprache: 'DE',
+  // zustand: 'NM',
+  preisbasis: 'trend',   // Phase 2: 'trend'|'lowPrice'|'lowPriceEx'|'germanProLow'|'avg7'|'avg30'
+  foil: false,           // Phase 2: Foil-Umschalter
   timeRange: '1M',
   searchQuery: '',
 };
@@ -25,12 +35,12 @@ export function ladeSettings() {
     const raw = localStorage.getItem('kartenwert_settings');
     if (raw) {
       const saved = JSON.parse(raw);
-      if (saved.sprache) state.sprache = saved.sprache;
-      if (saved.zustand) state.zustand = saved.zustand;
-      // Apply font size if stored
-      if (saved.fontSize === 'gross') {
-        document.body.classList.add('font-gross');
-      }
+      // PHASE-3-REAKTIVIERUNG: sprache + zustand laden
+      // if (saved.sprache) state.sprache = saved.sprache;
+      // if (saved.zustand) state.zustand = saved.zustand;
+      if (saved.preisbasis) state.preisbasis = saved.preisbasis;
+      if (saved.foil !== undefined) state.foil = saved.foil;
+      if (saved.fontSize === 'gross') document.body.classList.add('font-gross');
     }
   } catch (e) {
     console.warn('Settings konnten nicht geladen werden:', e);
@@ -43,8 +53,11 @@ export function speichereSettings(extra = {}) {
     const existing = raw ? JSON.parse(raw) : {};
     const updated = {
       ...existing,
-      sprache: state.sprache,
-      zustand: state.zustand,
+      // PHASE-3-REAKTIVIERUNG: sprache + zustand speichern
+      // sprache: state.sprache,
+      // zustand: state.zustand,
+      preisbasis: state.preisbasis,
+      foil: state.foil,
       ...extra,
     };
     localStorage.setItem('kartenwert_settings', JSON.stringify(updated));

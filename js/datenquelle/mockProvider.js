@@ -1,20 +1,19 @@
 import { Provider } from './provider.js';
 
-const SPRACHE_MULTI = {
-  DE: 1.0,
-  EN: 0.88,
-  FR: 0.82,
-  IT: 0.77,
-  ES: 0.75,
-};
+// PHASE-3-REAKTIVIERUNG: Sprach-/Zustandsmultiplikatoren reaktivieren,
+// sobald die granulare Cardmarket-API verfügbar ist.
+//
+// const SPRACHE_MULTI = { DE: 1.0, EN: 0.88, FR: 0.82, IT: 0.77, ES: 0.75 };
+// const ZUSTAND_MULTI = { NM: 1.0, EX: 0.78, GD: 0.58, LP: 0.42, PL: 0.28, PO: 0.14 };
 
-const ZUSTAND_MULTI = {
-  NM: 1.0,
-  EX: 0.78,
-  GD: 0.58,
-  LP: 0.42,
-  PL: 0.28,
-  PO: 0.14,
+// Phase 2: preisbasis-Varianten simulieren leicht unterschiedliche Preise
+const PREISBASIS_MULTI = {
+  trend:        1.00,
+  lowPrice:     0.87,
+  lowPriceEx:   0.96,
+  germanProLow: 0.92,
+  avg7:         0.99,
+  avg30:        0.97,
 };
 
 // Simple seeded pseudo-random number generator (mulberry32)
@@ -71,20 +70,21 @@ export class MockProvider extends Provider {
     return karte;
   }
 
-  async getAktuellerPreis(id, sprache, zustand) {
+  // PHASE-3-REAKTIVIERUNG: alte Signatur → getAktuellerPreis(id, sprache, zustand)
+  async getAktuellerPreis(id, preisbasis = 'trend', foil = false) {
     const karte = await this.getKarte(id);
-    const sMulti = SPRACHE_MULTI[sprache] ?? 1.0;
-    const zMulti = ZUSTAND_MULTI[zustand] ?? 1.0;
-    const basis = karte.basisPreis * sMulti * zMulti;
-    // Add tiny seeded noise (±2%)
-    const rng = seededRandom(strToSeed(`${id}-${sprache}-${zustand}-current`));
-    const noise = 1 + (rng() - 0.5) * 0.04;
+    const pMulti = PREISBASIS_MULTI[preisbasis] ?? 1.0;
+    const fMulti = foil ? 1.85 : 1.0;
+    const basis  = karte.basisPreis * pMulti * fMulti;
+    const rng    = seededRandom(strToSeed(`${id}-${preisbasis}-${foil}-current`));
+    const noise  = 1 + (rng() - 0.5) * 0.04;
     return Math.round(basis * noise * 100) / 100;
   }
 
-  async getPreisHistorie(id, sprache, zustand, range) {
-    const aktuellerPreis = await this.getAktuellerPreis(id, sprache, zustand);
-    const seedKey = `${id}-${sprache}-${zustand}-${range}`;
+  // PHASE-3-REAKTIVIERUNG: alte Signatur → getPreisHistorie(id, sprache, zustand, range)
+  async getPreisHistorie(id, preisbasis = 'trend', foil = false, range = '1M') {
+    const aktuellerPreis = await this.getAktuellerPreis(id, preisbasis, foil);
+    const seedKey = `${id}-${preisbasis}-${foil}-${range}`;
     const rng = seededRandom(strToSeed(seedKey));
 
     let labels = [];
