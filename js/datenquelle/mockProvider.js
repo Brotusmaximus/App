@@ -7,13 +7,14 @@ import { Provider } from './provider.js';
 // const ZUSTAND_MULTI = { NM: 1.0, EX: 0.78, GD: 0.58, LP: 0.42, PL: 0.28, PO: 0.14 };
 
 // Phase 2: preisbasis-Varianten simulieren leicht unterschiedliche Preise
+// (entspricht den realen CM-Feldern: trend, low, avg, avg7, avg30)
 const PREISBASIS_MULTI = {
-  trend:        1.00,
-  lowPrice:     0.87,
-  lowPriceEx:   0.96,
-  germanProLow: 0.92,
-  avg7:         0.99,
-  avg30:        0.97,
+  trend: 1.00,
+  low:   0.87,
+  avg:   0.95,
+  avg1:  0.96,
+  avg7:  0.99,
+  avg30: 0.97,
 };
 
 // Simple seeded pseudo-random number generator (mulberry32)
@@ -71,20 +72,20 @@ export class MockProvider extends Provider {
   }
 
   // PHASE-3-REAKTIVIERUNG: alte Signatur → getAktuellerPreis(id, sprache, zustand)
-  async getAktuellerPreis(id, preisbasis = 'trend', foil = false) {
-    const karte = await this.getKarte(id);
+  async getAktuellerPreis(id, preisbasis = 'trend', holo = false) {
+    const karte  = await this.getKarte(id);
     const pMulti = PREISBASIS_MULTI[preisbasis] ?? 1.0;
-    const fMulti = foil ? 1.85 : 1.0;
-    const basis  = karte.basisPreis * pMulti * fMulti;
-    const rng    = seededRandom(strToSeed(`${id}-${preisbasis}-${foil}-current`));
+    const hMulti = holo ? 2.0 : 1.0; // Holo-Variante ist typischerweise ~2× teurer
+    const basis  = karte.basisPreis * pMulti * hMulti;
+    const rng    = seededRandom(strToSeed(`${id}-${preisbasis}-${holo}-current`));
     const noise  = 1 + (rng() - 0.5) * 0.04;
     return Math.round(basis * noise * 100) / 100;
   }
 
   // PHASE-3-REAKTIVIERUNG: alte Signatur → getPreisHistorie(id, sprache, zustand, range)
-  async getPreisHistorie(id, preisbasis = 'trend', foil = false, range = '1M') {
-    const aktuellerPreis = await this.getAktuellerPreis(id, preisbasis, foil);
-    const seedKey = `${id}-${preisbasis}-${foil}-${range}`;
+  async getPreisHistorie(id, preisbasis = 'trend', holo = false, range = '1M') {
+    const aktuellerPreis = await this.getAktuellerPreis(id, preisbasis, holo);
+    const seedKey = `${id}-${preisbasis}-${holo}-${range}`;
     const rng = seededRandom(strToSeed(seedKey));
 
     let labels = [];

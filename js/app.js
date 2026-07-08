@@ -23,8 +23,8 @@ export const state = {
   // PHASE-3-REAKTIVIERUNG: sprache + zustand reaktivieren, sobald granulare API verfügbar
   // sprache: 'DE',
   // zustand: 'NM',
-  preisbasis: 'trend',   // Phase 2: 'trend'|'lowPrice'|'lowPriceEx'|'germanProLow'|'avg7'|'avg30'
-  foil: false,           // Phase 2: Foil-Umschalter
+  preisbasis: 'trend',   // Phase 2: 'trend'|'low'|'avg'|'avg7'|'avg30'
+  holo: false,           // Phase 2: Normal (false) vs. Holo (true)
   timeRange: '1M',
   searchQuery: '',
 };
@@ -39,7 +39,7 @@ export function ladeSettings() {
       // if (saved.sprache) state.sprache = saved.sprache;
       // if (saved.zustand) state.zustand = saved.zustand;
       if (saved.preisbasis) state.preisbasis = saved.preisbasis;
-      if (saved.foil !== undefined) state.foil = saved.foil;
+      if (saved.holo !== undefined) state.holo = saved.holo;
       if (saved.fontSize === 'gross') document.body.classList.add('font-gross');
     }
   } catch (e) {
@@ -57,7 +57,7 @@ export function speichereSettings(extra = {}) {
       // sprache: state.sprache,
       // zustand: state.zustand,
       preisbasis: state.preisbasis,
-      foil: state.foil,
+      holo: state.holo,
       ...extra,
     };
     localStorage.setItem('kartenwert_settings', JSON.stringify(updated));

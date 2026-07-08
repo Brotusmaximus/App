@@ -8,18 +8,21 @@ import { Provider } from './provider.js';
  *   data/latest.json       – Aktuelle Preise beobachteter Karten
  *   data/history/{id}.json – Täglicher Preisverlauf je Karte
  *
- * Implementiert den Provider-Vertrag v2 (preisbasis + foil).
+ * Preisfeld-Schema in latest.json und history/*.json:
+ *   trend, low, avg, avg1, avg7, avg30          – Normal-Version
+ *   holoTrend, holoLow, holoAvg, holoAvg7, ...  – Holo-Version
+ *   (abgeleitet aus CM-Feldern trend-holo, low-holo, avg-holo etc.)
  */
 export class CardmarketFileProvider extends Provider {
   constructor() {
     super();
     this._catalog      = null;
-    this._catalogIndex = null; // {idProduct → karte}
+    this._catalogIndex = null;
     this._latest       = null;
     this._historyCache = {};
   }
 
-  // ── Interner Loader ──────────────────────────────────────────────────────
+  // ── Loader ───────────────────────────────────────────────────────────────
 
   async _ladeCatalog() {
     if (!this._catalog) {
@@ -27,9 +30,7 @@ export class CardmarketFileProvider extends Provider {
       if (!res.ok) throw new Error(`Katalog nicht verfügbar (HTTP ${res.status})`);
       this._catalog = await res.json();
       this._catalogIndex = {};
-      for (const karte of this._catalog) {
-        this._catalogIndex[String(karte.idProduct)] = karte;
-      }
+      for (const k of this._catalog) this._catalogIndex[String(k.idProduct)] = k;
     }
     return this._catalog;
   }
@@ -37,11 +38,7 @@ export class CardmarketFileProvider extends Provider {
   async _ladeLatest() {
     if (!this._latest) {
       const res = await fetch('data/latest.json');
-      if (!res.ok) {
-        this._latest = {};
-        return this._latest;
-      }
-      this._latest = await res.json();
+      this._latest = res.ok ? await res.json() : {};
     }
     return this._latest;
   }
@@ -62,10 +59,10 @@ export class CardmarketFileProvider extends Provider {
     if (!query || !query.trim()) return catalog;
     const q = query.trim().toLowerCase();
     return catalog.filter(k =>
-      k.name.toLowerCase().includes(q)      ||
-      k.expansion.toLowerCase().includes(q) ||
-      k.number?.toLowerCase().includes(q)   ||
-      k.rarity?.toLowerCase().includes(q)
+      k.name.toLowerCase().includes(q)        ||
+      (k.expansion || '').toLowerCase().includes(q) ||
+      (k.number || '').toLowerCase().includes(q)    ||
+      (k.rarity  || '').toLowerCase().includes(q)
     );
   }
 
@@ -73,69 +70,60 @@ export class CardmarketFileProvider extends Provider {
     await this._ladeCatalog();
     const karte = this._catalogIndex?.[String(id)];
     if (!karte) throw new Error(`Karte nicht gefunden: ${id}`);
-    // Fallback für fehlendes Bild
     return { ...karte, bild: karte.bild || 'assets/karten/placeholder.svg' };
   }
 
   // PHASE-3-REAKTIVIERUNG: alte Signatur → getAktuellerPreis(id, sprache, zustand)
-  async getAktuellerPreis(id, preisbasis = 'trend', foil = false) {
+  async getAktuellerPreis(id, preisbasis = 'trend', holo = false) {
     const latest  = await this._ladeLatest();
     const eintrag = latest[String(id)];
-    if (!eintrag) return null; // Noch nicht in der Watchlist des Hintergrund-Jobs
-
-    const feld = _preisbasisFeld(preisbasis, foil);
-    return eintrag[feld] ?? null;
+    if (!eintrag) return null;
+    return eintrag[_preisbasisFeld(preisbasis, holo)] ?? null;
   }
 
   // PHASE-3-REAKTIVIERUNG: alte Signatur → getPreisHistorie(id, sprache, zustand, range)
-  async getPreisHistorie(id, preisbasis = 'trend', foil = false, range = '1M') {
+  async getPreisHistorie(id, preisbasis = 'trend', holo = false, range = '1M') {
     const history = await this._ladeHistory(id);
     if (!history || history.length === 0) return [];
-
-    const feld     = _preisbasisFeld(preisbasis, foil);
-    const gefiltert = _filterByRange(history, range);
-
-    return gefiltert
-      .filter(punkt => punkt[feld] != null)
-      .map(punkt => ({ t: punkt.datum, preis: punkt[feld] }));
+    const feld = _preisbasisFeld(preisbasis, holo);
+    return _filterByRange(history, range)
+      .filter(p => p[feld] != null)
+      .map(p => ({ t: p.datum, preis: p[feld] }));
   }
 }
 
 // ── Hilfsfunktionen ──────────────────────────────────────────────────────────
 
 /**
- * Mappt preisbasis + foil auf das JSON-Feldnamen aus latest.json / history.json
+ * Mappt preisbasis + holo → konkreter Feldname in latest.json / history.json
+ *
+ * Normal-Felder: trend | low | avg | avg1 | avg7 | avg30
+ * Holo-Felder:  holoTrend | holoLow | holoAvg | holoAvg1 | holoAvg7 | holoAvg30
+ * (CM-Quelle:   trend-holo, low-holo, avg-holo, avg1-holo, avg7-holo, avg30-holo)
  */
-function _preisbasisFeld(preisbasis, foil) {
-  if (!foil) return preisbasis;
-  const FOIL_MAP = {
-    trend:        'foilTrend',
-    lowPrice:     'foilLow',
-    lowPriceEx:   'foilLow',    // kein separates foilLowEx – nächste Entsprechung
-    germanProLow: 'germanProLow', // kein Foil-Äquivalent bei CM
-    avg7:         'foilAvg7',
-    avg30:        'foilAvg30',
+function _preisbasisFeld(preisbasis, holo) {
+  if (!holo) return preisbasis;
+  const HOLO_MAP = {
+    trend: 'holoTrend',
+    low:   'holoLow',
+    avg:   'holoAvg',
+    avg1:  'holoAvg1',
+    avg7:  'holoAvg7',
+    avg30: 'holoAvg30',
   };
-  return FOIL_MAP[preisbasis] ?? preisbasis;
+  return HOLO_MAP[preisbasis] ?? preisbasis;
 }
 
-/**
- * Filtert die tägliche Historien-Liste nach Zeitraum.
- * history-Einträge haben ein ISO-Date-Feld "datum" (YYYY-MM-DD).
- */
 function _filterByRange(history, range) {
-  const jetzt = new Date();
+  const now = new Date();
   let cutoff;
-
   switch (range) {
-    case '1T': { const d = new Date(jetzt); d.setDate(d.getDate() - 1);       cutoff = d; break; }
-    case '1W': { const d = new Date(jetzt); d.setDate(d.getDate() - 7);       cutoff = d; break; }
-    case '1M': { const d = new Date(jetzt); d.setMonth(d.getMonth() - 1);     cutoff = d; break; }
-    case '1J': { const d = new Date(jetzt); d.setFullYear(d.getFullYear()-1); cutoff = d; break; }
-    case 'Max': default: cutoff = null;
+    case '1T': { const d = new Date(now); d.setDate(d.getDate() - 1);       cutoff = d; break; }
+    case '1W': { const d = new Date(now); d.setDate(d.getDate() - 7);       cutoff = d; break; }
+    case '1M': { const d = new Date(now); d.setMonth(d.getMonth() - 1);     cutoff = d; break; }
+    case '1J': { const d = new Date(now); d.setFullYear(d.getFullYear()-1); cutoff = d; break; }
+    default:  return history;
   }
-
-  if (!cutoff) return history;
   const cutStr = cutoff.toISOString().slice(0, 10);
   return history.filter(p => p.datum >= cutStr);
 }

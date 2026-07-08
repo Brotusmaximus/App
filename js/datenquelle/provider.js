@@ -15,10 +15,10 @@ export class Provider {
   async getKarte(id) { throw new Error('Not implemented'); }
 
   // PHASE-3-REAKTIVIERUNG: alte Signatur → getAktuellerPreis(id, sprache, zustand)
-  /** @param {string} id @param {string} preisbasis @param {boolean} foil @returns {Promise<number|null>} */
-  async getAktuellerPreis(id, preisbasis, foil) { throw new Error('Not implemented'); }
+  /** @param {string} id @param {string} preisbasis @param {boolean} holo @returns {Promise<number|null>} */
+  async getAktuellerPreis(id, preisbasis, holo) { throw new Error('Not implemented'); }
 
   // PHASE-3-REAKTIVIERUNG: alte Signatur → getPreisHistorie(id, sprache, zustand, range)
-  /** @param {string} id @param {string} preisbasis @param {boolean} foil @param {string} range @returns {Promise<Array<{t:string,preis:number}>>} */
-  async getPreisHistorie(id, preisbasis, foil, range) { throw new Error('Not implemented'); }
+  /** @param {string} id @param {string} preisbasis @param {boolean} holo @param {string} range @returns {Promise<Array<{t:string,preis:number}>>} */
+  async getPreisHistorie(id, preisbasis, holo, range) { throw new Error('Not implemented'); }
 }

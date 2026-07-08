@@ -13,8 +13,10 @@ function saveWatchlist(wl) {
 }
 
 function migrateEntry(e) {
-  if (e.preisbasis !== undefined) return e;
-  return { kartenId: e.kartenId, preisbasis: 'trend', foil: false, seit: e.seit };
+  if (e.holo !== undefined) return e;                        // Phase 2.1+ (holo)
+  if (e.preisbasis !== undefined)                            // Phase 2.0 (foil → holo)
+    return { kartenId: e.kartenId, preisbasis: e.preisbasis, holo: e.foil ?? false, seit: e.seit };
+  return { kartenId: e.kartenId, preisbasis: 'trend', holo: false, seit: e.seit }; // Phase 1
 }
 
 function formatDatum(isoStr) {
@@ -31,8 +33,9 @@ function escapeHtml(str) {
 
 function preisbasisLabel(preisbasis) {
   const MAP = {
-    trend: 'Trend', lowPrice: 'Low', lowPriceEx: 'Low EX+',
-    germanProLow: 'DE Pro Low', avg7: 'Ø7T', avg30: 'Ø30T',
+    trend: 'Trend', low: 'Low', avg: 'Ø Avg',
+    avg7: 'Ø7T', avg30: 'Ø30T',
+    // PHASE-3-REAKTIVIERUNG: lowPriceEx, germanProLow hier ergänzen
   };
   return MAP[preisbasis] ?? preisbasis;
 }
@@ -132,12 +135,12 @@ export async function renderWatchlist(container, provider) {
   const entries = await Promise.all(wl.map(async (entry, idx) => {
     try {
       const karte = await provider.getKarte(entry.kartenId);
-      const preis = await provider.getAktuellerPreis(entry.kartenId, entry.preisbasis, entry.foil);
+      const preis = await provider.getAktuellerPreis(entry.kartenId, entry.preisbasis, entry.holo);
 
       // Delta: Vergleich mit ersten verfügbaren Historienpunkt (letzte 30T)
       let delta = null;
       try {
-        const hist = await provider.getPreisHistorie(entry.kartenId, entry.preisbasis, entry.foil, '1M');
+        const hist = await provider.getPreisHistorie(entry.kartenId, entry.preisbasis, entry.holo, '1M');
         if (hist && hist.length >= 2 && preis !== null) {
           delta = ((preis - hist[0].preis) / hist[0].preis) * 100;
         }
@@ -174,7 +177,7 @@ export async function renderWatchlist(container, provider) {
         <div class="wl-kachel" data-idx="${e.idx}"
              data-karten-id="${escapeHtml(e.entry.kartenId)}"
              data-preisbasis="${escapeHtml(e.entry.preisbasis)}"
-             data-foil="${e.entry.foil ? 'true' : 'false'}"
+             data-holo="${e.entry.holo ? 'true' : 'false'}"
              role="button" tabindex="0" title="${escapeHtml(e.karte.name)} anzeigen">
           <div class="wl-kachel-top">
             <img class="wl-thumb" src="${escapeHtml(e.karte.bild || 'assets/karten/placeholder.svg')}"
@@ -185,7 +188,7 @@ export async function renderWatchlist(container, provider) {
               <div class="wl-set">${escapeHtml(e.karte.expansion ?? e.karte.set ?? '')} · ${escapeHtml(e.karte.number ?? e.karte.nr ?? '')}</div>
               <div class="wl-tags">
                 <span class="wl-tag">${escapeHtml(preisbasisLabel(e.entry.preisbasis))}</span>
-                ${e.entry.foil ? '<span class="wl-tag wl-tag--foil">Foil</span>' : ''}
+                ${e.entry.holo ? '<span class="wl-tag wl-tag--holo">Foil</span>' : ''}
               </div>
             </div>
             <button class="wl-remove-btn" data-idx="${e.idx}" title="Aus Watchlist entfernen" aria-label="Entfernen">×</button>
@@ -212,7 +215,7 @@ export async function renderWatchlist(container, provider) {
     kachel.addEventListener('click', e => {
       if (e.target.closest('.wl-remove-btn')) return;
       state.preisbasis        = kachel.dataset.preisbasis || 'trend';
-      state.foil              = kachel.dataset.foil === 'true';
+      state.holo              = kachel.dataset.holo === 'true';
       state.selectedKarteId   = kachel.dataset.kartenId;
       navigiere('suche', kachel.dataset.kartenId);
     });
@@ -230,7 +233,7 @@ export async function renderWatchlist(container, provider) {
       if (entry) {
         const currentWl = getWatchlist().map(migrateEntry);
         const newWl     = currentWl.filter(x =>
-          !(x.kartenId === entry.kartenId && x.preisbasis === entry.preisbasis && x.foil === entry.foil)
+          !(x.kartenId === entry.kartenId && x.preisbasis === entry.preisbasis && x.holo === entry.holo)
         );
         saveWatchlist(newWl);
         renderWatchlist(container, provider);

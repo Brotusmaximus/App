@@ -5,13 +5,14 @@ import { speichereSettings, navigiere, renderNavOnly } from '../app.js';
 // const SPRACHEN  = ['DE','EN','FR','IT','ES'];
 // const ZUSTAENDE = ['NM','EX','GD','LP','PL','PO'];
 
+// Preisbasen: nur Felder die CM wirklich liefert (Phase 2).
+// PHASE-3-REAKTIVIERUNG: lowPriceEx + germanProLow reaktivieren wenn direkte API verfügbar.
 const PREISBASEN = [
-  { id: 'trend',        label: 'Trend'        },
-  { id: 'lowPrice',     label: 'Low'          },
-  { id: 'lowPriceEx',   label: 'Low EX+'      },
-  { id: 'germanProLow', label: 'DE Pro Low'   },
-  { id: 'avg7',         label: 'Ø 7 Tage'     },
-  { id: 'avg30',        label: 'Ø 30 Tage'    },
+  { id: 'trend', label: 'Trend'    },
+  { id: 'low',   label: 'Low'      },
+  { id: 'avg',   label: 'Ø (Avg)'  },
+  { id: 'avg7',  label: 'Ø 7 Tage' },
+  { id: 'avg30', label: 'Ø 30 Tage'},
 ];
 
 const RANGES = ['1T', '1W', '1M', '1J', 'Max'];
@@ -28,28 +29,29 @@ function saveWatchlist(wl) {
 }
 
 function migrateEntry(e) {
-  if (e.preisbasis !== undefined) return e;
-  // Phase-1-Eintrag migrieren: sprache/zustand → preisbasis/foil
-  return { kartenId: e.kartenId, preisbasis: 'trend', foil: false, seit: e.seit };
+  if (e.holo !== undefined) return e;                        // Phase 2.1+ (holo)
+  if (e.preisbasis !== undefined)                            // Phase 2.0 (foil → holo)
+    return { kartenId: e.kartenId, preisbasis: e.preisbasis, holo: e.foil ?? false, seit: e.seit };
+  return { kartenId: e.kartenId, preisbasis: 'trend', holo: false, seit: e.seit }; // Phase 1
 }
 
-function isTracked(kartenId, preisbasis, foil) {
+function isTracked(kartenId, preisbasis, holo) {
   return getWatchlist().some(e => {
     const m = migrateEntry(e);
-    return m.kartenId === kartenId && m.preisbasis === preisbasis && m.foil === foil;
+    return m.kartenId === kartenId && m.preisbasis === preisbasis && m.holo === holo;
   });
 }
 
-function toggleTracking(karte, preisbasis, foil) {
+function toggleTracking(karte, preisbasis, holo) {
   const wl  = getWatchlist();
   const idx = wl.findIndex(e => {
     const m = migrateEntry(e);
-    return m.kartenId === karte.id && m.preisbasis === preisbasis && m.foil === foil;
+    return m.kartenId === karte.id && m.preisbasis === preisbasis && m.holo === holo;
   });
   if (idx >= 0) {
     wl.splice(idx, 1);
   } else {
-    wl.push({ kartenId: karte.id, preisbasis, foil, seit: new Date().toISOString() });
+    wl.push({ kartenId: karte.id, preisbasis, holo, seit: new Date().toISOString() });
   }
   saveWatchlist(wl);
 }
@@ -85,8 +87,8 @@ export async function renderKartendetail(container, state, provider) {
   let karte, preis, history;
   try {
     karte   = await provider.getKarte(state.selectedKarteId);
-    preis   = await provider.getAktuellerPreis(state.selectedKarteId, state.preisbasis, state.foil);
-    history = await provider.getPreisHistorie(state.selectedKarteId, state.preisbasis, state.foil, state.timeRange);
+    preis   = await provider.getAktuellerPreis(state.selectedKarteId, state.preisbasis, state.holo);
+    history = await provider.getPreisHistorie(state.selectedKarteId, state.preisbasis, state.holo, state.timeRange);
   } catch (err) {
     container.innerHTML = `
       <div class="error-state">
@@ -98,7 +100,7 @@ export async function renderKartendetail(container, state, provider) {
   }
 
   const delta      = calcDelta(history);
-  const tracked    = isTracked(karte.id, state.preisbasis, state.foil);
+  const tracked    = isTracked(karte.id, state.preisbasis, state.holo);
   const deltaClass = delta === null ? 'neutral' : delta >= 0 ? 'up' : 'down';
   const deltaStr   = delta === null
     ? '–'
@@ -147,12 +149,12 @@ export async function renderKartendetail(container, state, provider) {
         </div>
       </div>
 
-      <!-- Foil-Umschalter (Phase 2) -->
+      <!-- Holo-Umschalter (Phase 2) -->
       <div class="config-section config-section--inline">
         <div class="btn-group-label">Variante</div>
         <div class="btn-group foil-group">
-          <button class="config-btn${!state.foil ? ' btn-active' : ''}" data-foil="false">Normal</button>
-          <button class="config-btn${state.foil  ? ' btn-active' : ''}" data-foil="true">Foil</button>
+          <button class="config-btn${!state.holo ? ' btn-active' : ''}" data-holo="false">Normal</button>
+          <button class="config-btn${state.holo  ? ' btn-active' : ''}" data-holo="true">Holo</button>
         </div>
       </div>
 
@@ -213,9 +215,9 @@ export async function renderKartendetail(container, state, provider) {
   });
 
   // Event-Listener: Foil
-  container.querySelectorAll('[data-foil]').forEach(btn => {
+  container.querySelectorAll('[data-holo]').forEach(btn => {
     btn.addEventListener('click', async () => {
-      state.foil = btn.dataset.foil === 'true';
+      state.holo = btn.dataset.holo === 'true';
       speichereSettings();
       await refreshPreisAndChart(container, state, provider, karte);
     });
@@ -232,8 +234,8 @@ export async function renderKartendetail(container, state, provider) {
   // Event-Listener: Track-Button
   const trackBtn = container.querySelector('#track-btn');
   trackBtn.addEventListener('click', () => {
-    toggleTracking(karte, state.preisbasis, state.foil);
-    const nowTracked = isTracked(karte.id, state.preisbasis, state.foil);
+    toggleTracking(karte, state.preisbasis, state.holo);
+    const nowTracked = isTracked(karte.id, state.preisbasis, state.holo);
     trackBtn.className = `track-btn${nowTracked ? ' tracked' : ''}`;
     trackBtn.textContent = nowTracked ? '✓ Beobachtet' : '+ Beobachten';
     renderNavOnly();
@@ -247,14 +249,14 @@ async function refreshPreisAndChart(container, state, provider, karte) {
   container.querySelectorAll('[data-preisbasis]').forEach(b => {
     b.classList.toggle('btn-active', b.dataset.preisbasis === state.preisbasis);
   });
-  container.querySelectorAll('[data-foil]').forEach(b => {
-    b.classList.toggle('btn-active', (b.dataset.foil === 'true') === state.foil);
+  container.querySelectorAll('[data-holo]').forEach(b => {
+    b.classList.toggle('btn-active', (b.dataset.holo === 'true') === state.holo);
   });
 
   try {
     const [newPreis, newHistory] = await Promise.all([
-      provider.getAktuellerPreis(karte.id, state.preisbasis, state.foil),
-      provider.getPreisHistorie(karte.id, state.preisbasis, state.foil, state.timeRange),
+      provider.getAktuellerPreis(karte.id, state.preisbasis, state.holo),
+      provider.getPreisHistorie(karte.id, state.preisbasis, state.holo, state.timeRange),
     ]);
 
     const preisEl = container.querySelector('#preis-display');
@@ -272,7 +274,7 @@ async function refreshPreisAndChart(container, state, provider, karte) {
 
     const trackBtn = container.querySelector('#track-btn');
     if (trackBtn) {
-      const tracked = isTracked(karte.id, state.preisbasis, state.foil);
+      const tracked = isTracked(karte.id, state.preisbasis, state.holo);
       trackBtn.className = `track-btn${tracked ? ' tracked' : ''}`;
       trackBtn.textContent = tracked ? '✓ Beobachtet' : '+ Beobachten';
     }
@@ -303,7 +305,7 @@ async function refreshChart(container, state, provider) {
   });
   try {
     const karte      = await provider.getKarte(state.selectedKarteId);
-    const newHistory = await provider.getPreisHistorie(karte.id, state.preisbasis, state.foil, state.timeRange);
+    const newHistory = await provider.getPreisHistorie(karte.id, state.preisbasis, state.holo, state.timeRange);
 
     const delta  = calcDelta(newHistory);
     const deltaEl = container.querySelector('#preis-delta');
