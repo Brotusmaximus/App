@@ -1,20 +1,18 @@
 #!/usr/bin/env node
 /**
- * Kartenwert – Cardmarket Preisguide Updater
+ * Kartenwert – Cardmarket Preisguide Updater (Phase 2.1)
  *
- * Lädt Produktkatalog und Preisguide von Cardmarket herunter und
- * aktualisiert die Daten-JSON-Dateien im Repository.
+ * Verarbeitet JSON-Exporte von Cardmarket aus data/raw/:
+ *   price_guide*.json      – Preisguide  (Struktur: { priceGuides: [...] })
+ *   products_singles*.json – Katalog Einzelkarten
+ *   products_nonsingles*.json – Katalog Sealed/Zubehör (optional)
  *
- * Konfiguration via Umgebungsvariablen (GitHub Secrets):
- *   CARDMARKET_COOKIE    – Session-Cookie nach Login (Pflicht für Download)
- *   CM_CATALOG_URL       – Download-URL des Katalog-ZIP (optional)
- *   CM_PRICEGUIDE_URL    – Download-URL des Preisguide-ZIP (optional)
+ * Dateien werden per Präfix erkannt, nicht per festem Namen.
+ * Leerzeichen und Klammern im Dateinamen (z. B. "products_singles_6 (1).json") kein Problem.
  *
- * Alternativ: Dateien manuell als data/raw/catalog.csv und
- * data/raw/priceguide.csv ablegen → Action verarbeitet sie automatisch.
- *
- * Feldnamen-Varianten: Das Skript versucht mehrere bekannte Spaltenbezeichnungen.
- * Nach dem ersten Run data/raw/field-log.txt prüfen und ggf. FIELD_MAP anpassen.
+ * Optional: Download via CARDMARKET_COOKIE + CM_*_URL Secrets (ZIP → JSON/CSV).
+ * Robustheit: null-Werte im Preisguide sind normal, niemals abbrechen wegen einzelner
+ * fehlender Karte.
  */
 
 'use strict';
@@ -38,222 +36,193 @@ fs.mkdirSync(RAW_DIR, { recursive: true });
 
 const TODAY = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 
-// ── Umgebung ─────────────────────────────────────────────────────────────────
+// ── Umgebung ──────────────────────────────────────────────────────────────────
 
-const COOKIE        = process.env.CARDMARKET_COOKIE || '';
-const CATALOG_URL   = process.env.CM_CATALOG_URL    || '';
-const PRICEGUIDE_URL = process.env.CM_PRICEGUIDE_URL || '';
+const COOKIE         = process.env.CARDMARKET_COOKIE  || '';
+const CATALOG_URL    = process.env.CM_CATALOG_URL     || '';
+const PRICEGUIDE_URL = process.env.CM_PRICEGUIDE_URL  || '';
 
-// ── Bekannte Feldname-Varianten ───────────────────────────────────────────────
-// Cardmarket ändert die Spaltenbezeichnungen gelegentlich.
-// Erster Treffer pro Kategorie wird verwendet.
+// ── Datei-Erkennung per Präfix ────────────────────────────────────────────────
 
-const FIELD_MAP = {
-  idProduct:    ['idProduct', 'ID Product', 'ProductID', 'Id'],
-  name:         ['Name', 'CardName', 'ProductName'],
-  expansion:    ['Expansion', 'ExpansionName', 'Expansion Name', 'Set', 'SetName'],
-  number:       ['Number', 'CollectorNumber', 'Collector Number', 'CardNumber', 'No.'],
-  rarity:       ['Rarity', 'RarityName', 'Rarity Name'],
-  // Preisfelder
-  trend:        ['Trend Price', 'TREND', 'TrendPrice', 'Trend'],
-  lowPrice:     ['Low Price', 'LOW', 'LowPrice', 'Min Price', 'Low'],
-  lowPriceEx:   ['Low Price Ex+', 'Low (Ex+)', 'LowEx', 'Low Price (Foil Excl.)', 'Low EX+'],
-  germanProLow: ['German Pro Low', 'GermanProLow', 'German Low', 'DE Pro Low'],
-  avg7:         ['Avg. 7 Days Ago', 'AVG7', 'Avg7DaysAgo', 'Avg. (7 Days)', 'Average 7'],
-  avg30:        ['Avg. 30 Days Ago', 'AVG30', 'Avg30DaysAgo', 'Avg. (30 Days)', 'Average 30'],
-  foilTrend:    ['Foil Trend', 'TRENDFOIL', 'FoilTrend', 'Foil Trend Price'],
-  foilLow:      ['Foil Low', 'LOWFOIL', 'FoilLow', 'Foil Low Price'],
-  foilAvg7:     ['Foil Avg. 7 Days', 'AVGFOIL7', 'FoilAvg7', 'Foil Average 7'],
-  foilAvg30:    ['Foil Avg. 30 Days', 'AVGFOIL30', 'FoilAvg30', 'Foil Average 30'],
-};
-
-// ── Hilfsfunktionen ───────────────────────────────────────────────────────────
-
-function findField(row, candidates) {
-  for (const name of candidates) {
-    const val = row[name];
-    if (val !== undefined && val !== '') return val;
-  }
-  return null;
+/**
+ * Sucht in RAW_DIR nach einer Datei deren Name mit `prefix` beginnt (case-insensitiv)
+ * und mit `.json` endet. Gibt den vollständigen Pfad zurück oder null.
+ */
+function findRawFile(prefix) {
+  if (!fs.existsSync(RAW_DIR)) return null;
+  const lower = prefix.toLowerCase();
+  const match = fs.readdirSync(RAW_DIR).find(f =>
+    f.toLowerCase().startsWith(lower) && f.toLowerCase().endsWith('.json')
+  );
+  return match ? path.join(RAW_DIR, match) : null;
 }
 
-function parseNum(str) {
-  if (str === null || str === undefined || str === '' || str === 'N/A' || str === '-') return null;
-  const n = parseFloat(String(str).replace(',', '.'));
+// ── Zahlparser ────────────────────────────────────────────────────────────────
+
+function parseNum(val) {
+  if (val === null || val === undefined || val === '') return null;
+  const n = typeof val === 'number' ? val : parseFloat(String(val).replace(',', '.'));
   return isNaN(n) ? null : Math.round(n * 100) / 100;
 }
 
-// ── CSV-Parser ────────────────────────────────────────────────────────────────
+// ── Root-Array aus JSON-Dokument finden ───────────────────────────────────────
 
-function parseCSV(text, logPath) {
-  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-  if (lines.length === 0) return [];
-
-  // Detect delimiter from first line (semicolon or comma)
-  const firstLine = lines[0];
-  const delim = (firstLine.split(';').length > firstLine.split(',').length) ? ';' : ',';
-  console.log(`  CSV-Trennzeichen erkannt: "${delim}"`);
-
-  const headers = parseCSVRow(firstLine, delim);
-
-  // Log detected headers for debugging
-  if (logPath) {
-    fs.writeFileSync(logPath, `Erkannte Spalten (${TODAY}):\n${headers.join('\n')}\n`);
-  }
-
-  const rows = [];
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    const values = parseCSVRow(line, delim);
-    const row = {};
-    headers.forEach((h, idx) => {
-      row[h.trim()] = (values[idx] ?? '').trim();
-    });
-    rows.push(row);
-  }
-
-  return rows;
+/**
+ * Cardmarket-JSONs haben typischerweise einen Wrapper-Schlüssel.
+ * Preisguide: { "priceGuides": [...] }
+ * Katalog:    { "products": [...] } oder direkt ein Array.
+ * Gibt das enthaltene Array zurück.
+ */
+function rootArray(data) {
+  if (Array.isArray(data)) return data;
+  // Erster Array-Wert im Objekt
+  const arrayVal = Object.values(data).find(v => Array.isArray(v));
+  return arrayVal || [];
 }
 
-function parseCSVRow(line, delim) {
-  const result = [];
-  let inQuotes = false;
-  let current = '';
+// ── Preisguide-Parser ──────────────────────────────────────────────────────────
 
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
-      else inQuotes = !inQuotes;
-    } else if (ch === delim && !inQuotes) {
-      result.push(current);
-      current = '';
-    } else {
-      current += ch;
-    }
+/**
+ * Verarbeitet die Preisguide-JSON und gibt ein Mapping { idProduct → Preisfelder } zurück.
+ *
+ * Bekannte Felder der Cardmarket-Preisguide-JSON (Stand 2026):
+ *   idProduct   – int, Primärschlüssel
+ *   avg         – Durchschnittlicher Verkaufspreis
+ *   low         – Niedrigster Angebotspreis
+ *   trend       – Trend-Preis (CM-eigene Berechnung)
+ *   avg1        – Ø 1 Tag (oft null)
+ *   avg7        – Ø 7 Tage (oft null)
+ *   avg30       – Ø 30 Tage (oft null)
+ *   avg-holo    – Ø Holo-Version
+ *   low-holo    – Low Holo-Version
+ *   trend-holo  – Trend Holo-Version
+ *   avg1-holo, avg7-holo, avg30-holo – (teils null)
+ *
+ * Felder mit Bindestrich müssen über Klammerschreibweise gelesen werden:
+ *   entry["trend-holo"]  (nicht entry.trend-holo)
+ */
+function parsePreisguideJSON(content) {
+  const data = JSON.parse(content);
+  const entries = rootArray(data);
+
+  console.log(`  Preisguide: ${entries.length.toLocaleString()} Einträge`);
+
+  if (entries.length > 0) {
+    const keys = Object.keys(entries[0]);
+    console.log(`  Felder (erste Eintrags-Keys): ${keys.slice(0, 15).join(', ')}`);
+    fs.writeFileSync(
+      path.join(RAW_DIR, 'field-log-priceguide.txt'),
+      `Erkannte Felder (${TODAY}):\n${keys.join('\n')}\n\nBeispiel-Eintrag:\n${JSON.stringify(entries[0], null, 2)}\n`,
+    );
   }
-  result.push(current);
-  return result;
-}
 
-// ── Download ──────────────────────────────────────────────────────────────────
-
-function downloadFile(url, cookie, dest) {
-  return new Promise((resolve, reject) => {
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'application/zip,application/octet-stream,*/*',
-      'Accept-Language': 'de-DE,de;q=0.9',
+  const priceMap = {};
+  for (const e of entries) {
+    const id = String(e.idProduct);
+    if (!id || id === 'undefined') continue;
+    priceMap[id] = {
+      trend:     parseNum(e.trend),
+      low:       parseNum(e.low),
+      avg:       parseNum(e.avg),
+      avg1:      parseNum(e.avg1),
+      avg7:      parseNum(e.avg7),
+      avg30:     parseNum(e.avg30),
+      // Holo-Varianten (Bindestrich-Felder)
+      holoTrend: parseNum(e['trend-holo']),
+      holoLow:   parseNum(e['low-holo']),
+      holoAvg:   parseNum(e['avg-holo']),
+      holoAvg1:  parseNum(e['avg1-holo']),
+      holoAvg7:  parseNum(e['avg7-holo']),
+      holoAvg30: parseNum(e['avg30-holo']),
     };
-    if (cookie) headers['Cookie'] = cookie;
+  }
+  return priceMap;
+}
 
-    function request(targetUrl, depth) {
-      if (depth > 5) { reject(new Error('Zu viele Weiterleitungen')); return; }
-      const lib = targetUrl.startsWith('https') ? https : http;
-      lib.get(targetUrl, { headers }, (res) => {
-        if (res.statusCode >= 301 && res.statusCode <= 302) {
-          return request(res.headers.location, depth + 1);
-        }
-        if (res.statusCode !== 200) {
-          reject(new Error(`HTTP ${res.statusCode} von ${targetUrl} – Cookie abgelaufen oder URL falsch`));
-          return;
-        }
-        const out = fs.createWriteStream(dest);
-        res.pipe(out);
-        out.on('finish', () => out.close(resolve));
-        out.on('error', reject);
-      }).on('error', reject);
+// ── Katalog-Parser ────────────────────────────────────────────────────────────
+
+/**
+ * Verarbeitet eine Katalog-JSON (Singles oder Non-Singles).
+ *
+ * Bekannte Felder der Cardmarket-Katalog-JSON (werden beim ersten Run geloggt):
+ *   idProduct     – int, Primärschlüssel
+ *   Name          – Kartenname
+ *   Expansion Name – Set/Expansion
+ *   Number        – Kartennummer (z. B. "4")
+ *   Rarity Name   – Seltenheit
+ *   idCategory    – Kategorie-ID innerhalb des Spiels
+ *                   (z. B. 52/53 für Pokémon-Untertypen: Singles vs. Sealed)
+ *                   Wird geloggt aber nicht gefiltert – alle Einträge werden übernommen.
+ *
+ * Feldnamen werden tolerant ermittelt (mehrere Schreibvarianten probiert).
+ */
+function parseKatalogJSON(content, label) {
+  const data = JSON.parse(content);
+  const entries = rootArray(data);
+
+  console.log(`  Katalog (${label}): ${entries.length.toLocaleString()} Einträge`);
+
+  if (entries.length > 0) {
+    const keys = Object.keys(entries[0]);
+    console.log(`  Felder: ${keys.slice(0, 15).join(', ')}`);
+
+    // Debug-Log für Feldinspektion
+    const logPath = path.join(RAW_DIR, `field-log-catalog-${label}.txt`);
+    fs.writeFileSync(
+      logPath,
+      `Erkannte Felder (${TODAY}):\n${keys.join('\n')}\n\nBeispiel-Eintrag:\n${JSON.stringify(entries[0], null, 2)}\n`,
+    );
+
+    // idCategory-Verteilung loggen (Abschnitt 8 der UEBERGABE)
+    const catCounts = {};
+    for (const e of entries) {
+      const cat = String(e.idCategory ?? 'n/a');
+      catCounts[cat] = (catCounts[cat] || 0) + 1;
     }
-
-    request(url, 0);
-  });
-}
-
-// ── ZIP extrahieren ───────────────────────────────────────────────────────────
-
-function extractCSVFromZip(zipPath, prefix) {
-  const tmpDir = `/tmp/km-extract-${prefix}`;
-  fs.mkdirSync(tmpDir, { recursive: true });
-
-  try {
-    execSync(`unzip -o -q "${zipPath}" -d "${tmpDir}"`);
-  } catch (e) {
-    throw new Error(`unzip fehlgeschlagen: ${e.message}`);
+    console.log(`  idCategory-Verteilung: ${JSON.stringify(catCounts)}`);
   }
 
-  const files = fs.readdirSync(tmpDir).filter(f => f.toLowerCase().endsWith('.csv'));
-  if (files.length === 0) {
-    throw new Error(`Keine CSV-Datei in ZIP-Archiv ${zipPath} gefunden`);
+  const katalog = [];
+  for (const e of entries) {
+    const id = e.idProduct != null ? String(e.idProduct) : null;
+    if (!id) continue;
+
+    // Feldnamen tolerant lesen (mehrere bekannte Varianten)
+    const name      = e.Name      || e.name      || e.ProductName || '';
+    const expansion = e['Expansion Name'] || e.ExpansionName || e.Expansion || e.expansion || '';
+    const number    = e.Number    || e.number    || e.CollectorNumber || '';
+    const rarity    = e['Rarity Name']  || e.RarityName  || e.Rarity    || e.rarity    || '';
+
+    if (!name) continue; // Einträge ohne Namen überspringen
+
+    katalog.push({ idProduct: id, name, expansion, number, rarity, bild: null });
   }
-
-  if (files.length > 1) {
-    console.warn(`  Mehrere CSVs gefunden: ${files.join(', ')} – verwende erste`);
-  }
-
-  const content = fs.readFileSync(path.join(tmpDir, files[0]), 'utf8');
-  execSync(`rm -rf "${tmpDir}"`);
-  return content;
-}
-
-// ── Katalog verarbeiten ───────────────────────────────────────────────────────
-
-function processKatalog(csvContent) {
-  const logPath = path.join(RAW_DIR, 'field-log-catalog.txt');
-  const rows = parseCSV(csvContent, logPath);
-  console.log(`  ${rows.length.toLocaleString()} Katalog-Einträge gelesen`);
-
-  const katalog = rows
-    .filter(row => findField(row, FIELD_MAP.idProduct))
-    .map(row => ({
-      idProduct: String(findField(row, FIELD_MAP.idProduct)),
-      name:      findField(row, FIELD_MAP.name)      || 'Unbekannt',
-      expansion: findField(row, FIELD_MAP.expansion) || '',
-      number:    findField(row, FIELD_MAP.number)    || '',
-      rarity:    findField(row, FIELD_MAP.rarity)    || '',
-      bild:      null,
-    }));
 
   return katalog;
 }
 
-// ── Preisguide verarbeiten ────────────────────────────────────────────────────
+// ── Preise für Watchlist extrahieren ─────────────────────────────────────────
 
-function processPreisguide(csvContent, trackedIds) {
-  const logPath = path.join(RAW_DIR, 'field-log-priceguide.txt');
-  const rows = parseCSV(csvContent, logPath);
-  console.log(`  ${rows.length.toLocaleString()} Preisguide-Einträge gelesen`);
-
+function extractWatchlistPreise(priceMap, trackedIds) {
   const latest = {};
   let matched = 0;
+  const missing = [];
 
-  for (const row of rows) {
-    const id = String(findField(row, FIELD_MAP.idProduct) || '');
-    if (!trackedIds.has(id)) continue;
+  for (const id of trackedIds) {
+    const prices = priceMap[id];
+    if (!prices) {
+      missing.push(id);
+      continue;
+    }
     matched++;
-
-    latest[id] = {
-      trend:        parseNum(findField(row, FIELD_MAP.trend)),
-      lowPrice:     parseNum(findField(row, FIELD_MAP.lowPrice)),
-      lowPriceEx:   parseNum(findField(row, FIELD_MAP.lowPriceEx)),
-      germanProLow: parseNum(findField(row, FIELD_MAP.germanProLow)),
-      avg7:         parseNum(findField(row, FIELD_MAP.avg7)),
-      avg30:        parseNum(findField(row, FIELD_MAP.avg30)),
-      foilTrend:    parseNum(findField(row, FIELD_MAP.foilTrend)),
-      foilLow:      parseNum(findField(row, FIELD_MAP.foilLow)),
-      foilAvg7:     parseNum(findField(row, FIELD_MAP.foilAvg7)),
-      foilAvg30:    parseNum(findField(row, FIELD_MAP.foilAvg30)),
-      lastUpdate:   TODAY,
-    };
+    latest[id] = { ...prices, lastUpdate: TODAY };
   }
 
-  console.log(`  ${matched} / ${trackedIds.size} beobachtete Karten gefunden`);
-  if (matched < trackedIds.size) {
-    const missing = [...trackedIds].filter(id => !latest[id]);
+  console.log(`  Watchlist: ${matched}/${trackedIds.size} gefunden`);
+  if (missing.length > 0) {
     console.warn(`  Nicht im Preisguide: ${missing.join(', ')}`);
-    console.warn(`  → IDs in config/watchlist.json prüfen`);
+    console.warn(`  → idProduct in config/watchlist.json prüfen`);
   }
-
   return latest;
 }
 
@@ -261,65 +230,89 @@ function processPreisguide(csvContent, trackedIds) {
 
 function appendHistorie(idProduct, preise) {
   const histPath = path.join(HISTORY_DIR, `${idProduct}.json`);
-
   let history = [];
+
   if (fs.existsSync(histPath)) {
-    try {
-      history = JSON.parse(fs.readFileSync(histPath, 'utf8'));
-    } catch {
-      console.warn(`  ⚠ Bestehende Historie für ${idProduct} konnte nicht gelesen werden – starte neu`);
-    }
+    try { history = JSON.parse(fs.readFileSync(histPath, 'utf8')); }
+    catch { console.warn(`  Bestehende Historie für ${idProduct} unlesbar – neu anfangen`); }
   }
 
-  // Kein Duplikat für heute – überschreibe bestehenden Tageseintrag
+  const { lastUpdate, ...preisfelder } = preise;
+  const eintrag = { datum: TODAY, ...preisfelder };
+
   const todayIdx = history.findIndex(e => e.datum === TODAY);
-  const newEntry  = { datum: TODAY, ...preise };
+  if (todayIdx >= 0) history[todayIdx] = eintrag;
+  else history.push(eintrag);
 
-  if (todayIdx >= 0) {
-    history[todayIdx] = newEntry;
-  } else {
-    history.push(newEntry);
-  }
-
-  // Maximal 3 Jahre (1095 Einträge) behalten
   if (history.length > 1095) history = history.slice(-1095);
-
   fs.writeFileSync(histPath, JSON.stringify(history));
 }
 
-// ── Hilfsfunktion: CSV-String aus manueller Datei oder Download ───────────────
+// ── Optional: Download via Cookie + URL ───────────────────────────────────────
 
-async function getCsv(label, url, manualPath, tmpZipSuffix) {
-  // 1. Download versuchen
-  if (url && COOKIE) {
-    const tmpZip = `/tmp/kartenwert-${tmpZipSuffix}.zip`;
-    try {
-      process.stdout.write(`Lade ${label} herunter… `);
-      await downloadFile(url, COOKIE, tmpZip);
-      const csv = extractCSVFromZip(tmpZip, tmpZipSuffix);
-      console.log('✓');
-      try { fs.unlinkSync(tmpZip); } catch {}
-      return csv;
-    } catch (err) {
-      console.error(`\n❌ Download fehlgeschlagen: ${err.message}`);
+function downloadFile(url, cookie, dest) {
+  return new Promise((resolve, reject) => {
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+      'Accept': 'application/zip,application/json,application/octet-stream,*/*',
+    };
+    if (cookie) headers['Cookie'] = cookie;
+
+    function req(targetUrl, depth) {
+      if (depth > 5) { reject(new Error('Zu viele Weiterleitungen')); return; }
+      const lib = targetUrl.startsWith('https') ? https : http;
+      lib.get(targetUrl, { headers }, res => {
+        if (res.statusCode >= 301 && res.statusCode <= 302) return req(res.headers.location, depth + 1);
+        if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
+        const out = fs.createWriteStream(dest);
+        res.pipe(out);
+        out.on('finish', () => out.close(resolve));
+        out.on('error', reject);
+      }).on('error', reject);
     }
-  }
+    req(url, 0);
+  });
+}
 
-  // 2. Manuell hochgeladene Datei
-  if (fs.existsSync(manualPath)) {
-    console.log(`  Verwende manuellen Upload: ${path.relative(ROOT, manualPath)}`);
-    return fs.readFileSync(manualPath, 'utf8');
+async function tryDownload(label, url, cookie, dest) {
+  if (!url || !cookie) return false;
+  process.stdout.write(`  Download ${label}… `);
+  try {
+    await downloadFile(url, cookie, dest);
+    console.log('✓');
+    return true;
+  } catch (err) {
+    console.error(`\n  ❌ ${err.message}`);
+    return false;
   }
+}
 
-  return null;
+function extractFromZip(zipPath, dest) {
+  try {
+    const list = execSync(`unzip -l "${zipPath}"`).toString();
+    const m = list.match(/\d+\s+\S+\s+\S+\s+([\w\s\(\).-]+\.json)/i);
+    if (m) {
+      const name = m[1].trim();
+      execSync(`unzip -p "${zipPath}" "${name}" > "${dest}"`);
+      return true;
+    }
+    // Fallback: try CSV
+    const mc = list.match(/\d+\s+\S+\s+\S+\s+([\w\s\(\).-]+\.csv)/i);
+    if (mc) {
+      const name = mc[1].trim();
+      execSync(`unzip -p "${zipPath}" "${name}" > "${dest}"`);
+      return true;
+    }
+  } catch {}
+  return false;
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log(`\n══════════════════════════════════════════`);
+  console.log('\n══════════════════════════════════════════');
   console.log(` Kartenwert Preisguide-Update  ${TODAY}`);
-  console.log(`══════════════════════════════════════════\n`);
+  console.log('══════════════════════════════════════════\n');
 
   // Watchlist laden
   const watchlistPath = path.join(CONFIG_DIR, 'watchlist.json');
@@ -329,90 +322,125 @@ async function main() {
   }
   const watchlist  = JSON.parse(fs.readFileSync(watchlistPath, 'utf8'));
   const trackedIds = new Set(watchlist.map(e => String(e.idProduct)));
-  console.log(`Beobachtete Karten: ${trackedIds.size}`);
+  console.log(`Beobachtete Karten (config/watchlist.json): ${trackedIds.size}`);
 
-  if (!COOKIE && !CATALOG_URL && !PRICEGUIDE_URL) {
-    const hasManualCatalog = fs.existsSync(path.join(RAW_DIR, 'catalog.csv'));
-    const hasManualPrice   = fs.existsSync(path.join(RAW_DIR, 'priceguide.csv'));
-    if (!hasManualCatalog && !hasManualPrice) {
-      console.warn('\n⚠  Weder CARDMARKET_COOKIE noch manuelle Dateien in data/raw/ gefunden.');
-      console.warn('   Siehe docs/datenquelle.md für Setup-Anleitung.');
-      process.exit(0);
+  // ── Optional: Download versuchen ──────────────────────────────────────────
+
+  if (COOKIE) {
+    const tmpDir = '/tmp/kartenwert-dl';
+    fs.mkdirSync(tmpDir, { recursive: true });
+
+    if (PRICEGUIDE_URL) {
+      const zip  = path.join(tmpDir, 'priceguide.zip');
+      const dest = path.join(RAW_DIR, 'price_guide_dl.json');
+      if (await tryDownload('Preisguide', PRICEGUIDE_URL, COOKIE, zip)) {
+        if (!extractFromZip(zip, dest)) fs.copyFileSync(zip, dest);
+      }
+    }
+    if (CATALOG_URL) {
+      const zip  = path.join(tmpDir, 'catalog.zip');
+      const dest = path.join(RAW_DIR, 'products_singles_dl.json');
+      if (await tryDownload('Katalog', CATALOG_URL, COOKIE, zip)) {
+        if (!extractFromZip(zip, dest)) fs.copyFileSync(zip, dest);
+      }
+    }
+    try { execSync('rm -rf /tmp/kartenwert-dl'); } catch {}
+  }
+
+  // ── Preisguide lesen ──────────────────────────────────────────────────────
+
+  const priceGuidePath = findRawFile('price_guide');
+  let priceMap = null;
+
+  if (priceGuidePath) {
+    console.log(`\nPreisguide: ${path.basename(priceGuidePath)}`);
+    try {
+      const content = fs.readFileSync(priceGuidePath, 'utf8');
+      priceMap = parsePreisguideJSON(content);
+      console.log(`  ${Object.keys(priceMap).length.toLocaleString()} Preiseinträge verarbeitet`);
+    } catch (err) {
+      console.error(`  ❌ Preisguide konnte nicht geparst werden: ${err.message}`);
+    }
+  } else {
+    console.warn('\n⚠  Kein Preisguide gefunden (erwartet: data/raw/price_guide*.json)');
+    console.warn('  Datei dort ablegen und Action erneut auslösen.');
+  }
+
+  // ── Katalog lesen ─────────────────────────────────────────────────────────
+
+  const singlesPath    = findRawFile('products_singles');
+  const nonSinglesPath = findRawFile('products_nonsingles');
+  let gesamtKatalog = [];
+
+  for (const [filePath, label] of [[singlesPath, 'singles'], [nonSinglesPath, 'nonsingles']]) {
+    if (!filePath) continue;
+    console.log(`\nKatalog (${label}): ${path.basename(filePath)}`);
+    try {
+      const content = fs.readFileSync(filePath, 'utf8');
+      const teil    = parseKatalogJSON(content, label);
+      gesamtKatalog = gesamtKatalog.concat(teil);
+      console.log(`  ${teil.length.toLocaleString()} Einträge`);
+    } catch (err) {
+      console.error(`  ❌ Katalog (${label}) konnte nicht geparst werden: ${err.message}`);
     }
   }
 
-  let katalogAktualisiert = false;
-  let preiseAktualisiert  = false;
-
-  // ── Katalog ──────────────────────────────────────────────────────────────
-
-  const katalogCsv = await getCsv(
-    'Katalog',
-    CATALOG_URL,
-    path.join(RAW_DIR, 'catalog.csv'),
-    'catalog',
-  );
-
-  if (katalogCsv) {
-    console.log('\nVerarbeite Katalog…');
-    const katalog = processKatalog(katalogCsv);
-    if (katalog.length > 0) {
-      fs.writeFileSync(path.join(DATA_DIR, 'catalog.json'), JSON.stringify(katalog));
-      console.log(`✓ catalog.json: ${katalog.length.toLocaleString()} Karten`);
-      katalogAktualisiert = true;
-    } else {
-      console.warn('⚠  Katalog leer nach Verarbeitung – catalog.json nicht überschrieben');
-    }
+  if (!singlesPath && !nonSinglesPath) {
+    console.warn('\n⚠  Kein Katalog gefunden (erwartet: data/raw/products_singles*.json)');
   }
 
-  // ── Preisguide ────────────────────────────────────────────────────────────
+  // ── Dateien schreiben ──────────────────────────────────────────────────────
 
-  const preisguideCSV = await getCsv(
-    'Preisguide',
-    PRICEGUIDE_URL,
-    path.join(RAW_DIR, 'priceguide.csv'),
-    'priceguide',
-  );
+  let katAktualisiert = false;
+  let preisAktualisiert = false;
 
-  if (preisguideCSV) {
-    console.log('\nVerarbeite Preisguide…');
-    const latest = processPreisguide(preisguideCSV, trackedIds);
+  if (gesamtKatalog.length > 0) {
+    const catalogPath = path.join(DATA_DIR, 'catalog.json');
+    fs.writeFileSync(catalogPath, JSON.stringify(gesamtKatalog));
+    console.log(`\n✅ catalog.json: ${gesamtKatalog.length.toLocaleString()} Karten geschrieben`);
+    katAktualisiert = true;
+  }
 
-    if (Object.keys(latest).length > 0) {
-      // Mit bestehenden Daten zusammenführen (andere Karten nicht löschen)
-      let existingLatest = {};
+  if (priceMap && Object.keys(priceMap).length > 0) {
+    const watchlistPreise = extractWatchlistPreise(priceMap, trackedIds);
+
+    if (Object.keys(watchlistPreise).length > 0) {
+      // Bestehende latest.json mergen (andere Karten nicht löschen)
+      let existing = {};
       const latestPath = path.join(DATA_DIR, 'latest.json');
       if (fs.existsSync(latestPath)) {
-        try { existingLatest = JSON.parse(fs.readFileSync(latestPath, 'utf8')); } catch {}
+        try { existing = JSON.parse(fs.readFileSync(latestPath, 'utf8')); } catch {}
       }
-      const merged = { ...existingLatest, ...latest };
+      const merged = { ...existing, ...watchlistPreise };
       fs.writeFileSync(latestPath, JSON.stringify(merged, null, 2));
-      console.log(`✓ latest.json: ${Object.keys(latest).length} Karte(n) aktualisiert`);
+      console.log(`\n✅ latest.json: ${Object.keys(watchlistPreise).length} Karte(n) aktualisiert`);
 
-      // Historien anhängen
-      for (const [id, preise] of Object.entries(latest)) {
+      for (const [id, preise] of Object.entries(watchlistPreise)) {
         appendHistorie(id, preise);
       }
-      console.log(`✓ Historien: ${Object.keys(latest).length} Dateien aktualisiert`);
-      preiseAktualisiert = true;
+      console.log(`✅ Historien: ${Object.keys(watchlistPreise).length} Datei(en) aktualisiert`);
+      preisAktualisiert = true;
     }
   }
 
-  // ── Zusammenfassung ───────────────────────────────────────────────────────
+  // ── Zusammenfassung ────────────────────────────────────────────────────────
 
   console.log('\n──────────────────────────────────────────');
-  if (!katalogAktualisiert && !preiseAktualisiert) {
-    console.log('Keine Daten aktualisiert (keine Quelle verfügbar).');
-    console.log('Siehe docs/datenquelle.md für Setup-Anleitung.');
+  if (!katAktualisiert && !preisAktualisiert) {
+    console.warn('Keine Daten aktualisiert.');
+    console.warn('→ JSON-Dateien in data/raw/ ablegen:');
+    console.warn('  • price_guide*.json      (Preisguide)');
+    console.warn('  • products_singles*.json (Katalog Singles)');
+    console.warn('Danach Action via workflow_dispatch erneut auslösen.');
   } else {
-    if (katalogAktualisiert) console.log('✅ Katalog aktualisiert');
-    if (preiseAktualisiert)  console.log('✅ Preise & Historien aktualisiert');
+    if (katAktualisiert)  console.log('✅ Katalog aktualisiert');
+    if (preisAktualisiert) console.log('✅ Preise & Historien aktualisiert');
     console.log(`\nFertig: ${TODAY}`);
   }
   console.log('──────────────────────────────────────────\n');
 }
 
 main().catch(err => {
-  console.error('\n❌ Unerwarteter Fehler:', err.message);
+  console.error('\n❌ Unerwarteter Fehler:', err.message, err.stack);
   process.exit(1);
 });
