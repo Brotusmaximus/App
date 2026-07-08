@@ -350,28 +350,36 @@ async function main() {
   // ── Preisguide lesen ──────────────────────────────────────────────────────
 
   const priceGuidePath = findRawFile('price_guide');
-  let priceMap = null;
 
-  if (priceGuidePath) {
-    console.log(`\nPreisguide: ${path.basename(priceGuidePath)}`);
-    try {
-      const content = fs.readFileSync(priceGuidePath, 'utf8');
-      priceMap = parsePreisguideJSON(content);
-      console.log(`  ${Object.keys(priceMap).length.toLocaleString()} Preiseinträge verarbeitet`);
-    } catch (err) {
-      console.error(`  ❌ Preisguide konnte nicht geparst werden: ${err.message}`);
-    }
-  } else {
-    console.warn('\n⚠  Kein Preisguide gefunden (erwartet: data/raw/price_guide*.json)');
-    console.warn('  Datei dort ablegen und Action erneut auslösen.');
+  if (!priceGuidePath) {
+    console.error('\n❌ Kein Preisguide gefunden (erwartet: data/raw/price_guide*.json)');
+    console.error('  Datei in data/raw/ ablegen oder CARDMARKET_COOKIE + CM_PRICEGUIDE_URL setzen.');
+    process.exit(1);
+  }
+
+  console.log(`\nPreisguide: ${path.basename(priceGuidePath)}`);
+  let priceMap;
+  try {
+    const content = fs.readFileSync(priceGuidePath, 'utf8');
+    priceMap = parsePreisguideJSON(content);
+    console.log(`  ${Object.keys(priceMap).length.toLocaleString()} Preiseinträge verarbeitet`);
+  } catch (err) {
+    console.error(`  ❌ Preisguide konnte nicht geparst werden: ${err.message}`);
+    process.exit(1);
   }
 
   // ── Katalog lesen ─────────────────────────────────────────────────────────
 
   const singlesPath    = findRawFile('products_singles');
   const nonSinglesPath = findRawFile('products_nonsingles');
-  let gesamtKatalog = [];
 
+  if (!singlesPath) {
+    console.error('\n❌ Kein Katalog gefunden (erwartet: data/raw/products_singles*.json)');
+    console.error('  Datei in data/raw/ ablegen oder CARDMARKET_COOKIE + CM_CATALOG_URL setzen.');
+    process.exit(1);
+  }
+
+  let gesamtKatalog = [];
   for (const [filePath, label] of [[singlesPath, 'singles'], [nonSinglesPath, 'nonsingles']]) {
     if (!filePath) continue;
     console.log(`\nKatalog (${label}): ${path.basename(filePath)}`);
@@ -382,26 +390,22 @@ async function main() {
       console.log(`  ${teil.length.toLocaleString()} Einträge`);
     } catch (err) {
       console.error(`  ❌ Katalog (${label}) konnte nicht geparst werden: ${err.message}`);
+      process.exit(1);
     }
-  }
-
-  if (!singlesPath && !nonSinglesPath) {
-    console.warn('\n⚠  Kein Katalog gefunden (erwartet: data/raw/products_singles*.json)');
   }
 
   // ── Dateien schreiben ──────────────────────────────────────────────────────
 
-  let katAktualisiert = false;
+  const catalogPath = path.join(DATA_DIR, 'catalog.json');
+  fs.writeFileSync(catalogPath, JSON.stringify(gesamtKatalog));
+
+  console.log(`\nKatalog: ${gesamtKatalog.length.toLocaleString()} Einträge`);
+  console.log(`Preisguide: ${Object.keys(priceMap).length.toLocaleString()} Einträge`);
+  console.log(`catalog.json geschrieben: ${catalogPath}`);
+
   let preisAktualisiert = false;
 
-  if (gesamtKatalog.length > 0) {
-    const catalogPath = path.join(DATA_DIR, 'catalog.json');
-    fs.writeFileSync(catalogPath, JSON.stringify(gesamtKatalog));
-    console.log(`\n✅ catalog.json: ${gesamtKatalog.length.toLocaleString()} Karten geschrieben`);
-    katAktualisiert = true;
-  }
-
-  if (priceMap && Object.keys(priceMap).length > 0) {
+  if (Object.keys(priceMap).length > 0) {
     const watchlistPreise = extractWatchlistPreise(priceMap, trackedIds);
 
     if (Object.keys(watchlistPreise).length > 0) {
@@ -426,17 +430,9 @@ async function main() {
   // ── Zusammenfassung ────────────────────────────────────────────────────────
 
   console.log('\n──────────────────────────────────────────');
-  if (!katAktualisiert && !preisAktualisiert) {
-    console.warn('Keine Daten aktualisiert.');
-    console.warn('→ JSON-Dateien in data/raw/ ablegen:');
-    console.warn('  • price_guide*.json      (Preisguide)');
-    console.warn('  • products_singles*.json (Katalog Singles)');
-    console.warn('Danach Action via workflow_dispatch erneut auslösen.');
-  } else {
-    if (katAktualisiert)  console.log('✅ Katalog aktualisiert');
-    if (preisAktualisiert) console.log('✅ Preise & Historien aktualisiert');
-    console.log(`\nFertig: ${TODAY}`);
-  }
+  console.log('✅ Katalog aktualisiert');
+  if (preisAktualisiert) console.log('✅ Preise & Historien aktualisiert');
+  console.log(`\nFertig: ${TODAY}`);
   console.log('──────────────────────────────────────────\n');
 }
 

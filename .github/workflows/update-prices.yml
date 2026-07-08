@@ -14,6 +14,11 @@ jobs:
     permissions:
       contents: write   # für den Commit zurück ins Repo
 
+    env:
+      CARDMARKET_COOKIE: ${{ secrets.CARDMARKET_COOKIE }}
+      CM_CATALOG_URL:    ${{ secrets.CM_CATALOG_URL }}
+      CM_PRICEGUIDE_URL: ${{ secrets.CM_PRICEGUIDE_URL }}
+
     steps:
       - name: Repository auschecken
         uses: actions/checkout@v4
@@ -21,25 +26,22 @@ jobs:
       - name: Node.js einrichten
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
+      # Läuft immer: nutzt frisch heruntergeladene Cardmarket-Dateien (wenn
+      # CARDMARKET_COOKIE + CM_*_URL gesetzt sind) ODER die bereits in
+      # data/raw/ liegenden Dateien (manueller Upload, Option B).
       - name: Preise & Katalog aktualisieren
-        env:
-          CARDMARKET_COOKIE: ${{ secrets.CARDMARKET_COOKIE }}
-          CM_CATALOG_URL:    ${{ secrets.CM_CATALOG_URL }}
-          CM_PRICEGUIDE_URL: ${{ secrets.CM_PRICEGUIDE_URL }}
         run: node scripts/update-prices.js
 
-      - name: Änderungen prüfen
-        id: check_changes
-        run: |
-          git diff --quiet data/ || echo "changed=true" >> "$GITHUB_OUTPUT"
-
       - name: Daten committen und pushen
-        if: steps.check_changes.outputs.changed == 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/catalog.json data/latest.json data/history/
-          git commit -m "chore: Cardmarket Preisupdate $(date -u '+%Y-%m-%d') [skip ci]"
-          git push origin HEAD
+          git add -A
+          if git diff --staged --quiet; then
+            echo "Keine Änderungen zu committen."
+          else
+            git commit -m "chore: Cardmarket Preisupdate $(date -u '+%Y-%m-%d') [skip ci]"
+            git push origin HEAD
+          fi

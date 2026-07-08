@@ -1,0 +1,33 @@
+Erkannte Felder (2026-07-08):
+idProduct
+idCategory
+avg
+low
+trend
+avg1
+avg7
+avg30
+avg-holo
+low-holo
+trend-holo
+avg1-holo
+avg7-holo
+avg30-holo
+
+Beispiel-Eintrag:
+{
+  "idProduct": 271439,
+  "idCategory": 52,
+  "avg": 800,
+  "low": 85,
+  "trend": 382.9,
+  "avg1": null,
+  "avg7": null,
+  "avg30": null,
+  "avg-holo": null,
+  "low-holo": null,
+  "trend-holo": 3.93,
+  "avg1-holo": null,
+  "avg7-holo": null,
+  "avg30-holo": null
+}
