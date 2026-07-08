@@ -1,0 +1,66 @@
+[
+  {
+    "idProduct": "394064",
+    "name": "Glurak",
+    "expansion": "Basis-Set",
+    "number": "4/102",
+    "rarity": "Holo Rare",
+    "bild": "assets/karten/c1.svg"
+  },
+  {
+    "idProduct": "394066",
+    "name": "Bisaflor",
+    "expansion": "Basis-Set",
+    "number": "15/102",
+    "rarity": "Holo Rare",
+    "bild": "assets/karten/c2.svg"
+  },
+  {
+    "idProduct": "394062",
+    "name": "Turtok",
+    "expansion": "Basis-Set",
+    "number": "2/102",
+    "rarity": "Holo Rare",
+    "bild": "assets/karten/c3.svg"
+  },
+  {
+    "idProduct": "394089",
+    "name": "Pikachu",
+    "expansion": "Promo",
+    "number": "PROMO",
+    "rarity": "Promo",
+    "bild": "assets/karten/c4.svg"
+  },
+  {
+    "idProduct": "394074",
+    "name": "Mewtwo",
+    "expansion": "Basis-Set",
+    "number": "10/102",
+    "rarity": "Holo Rare",
+    "bild": "assets/karten/c5.svg"
+  },
+  {
+    "idProduct": "394202",
+    "name": "Relaxo",
+    "expansion": "Fossil",
+    "number": "27/62",
+    "rarity": "Holo Rare",
+    "bild": "assets/karten/c6.svg"
+  },
+  {
+    "idProduct": "394204",
+    "name": "Arkani",
+    "expansion": "Dschungel",
+    "number": "20/64",
+    "rarity": "Holo Rare",
+    "bild": "assets/karten/c7.svg"
+  },
+  {
+    "idProduct": "394186",
+    "name": "Dragoran",
+    "expansion": "Fossil",
+    "number": "4/62",
+    "rarity": "Holo Rare",
+    "bild": "assets/karten/c8.svg"
+  }
+]
