@@ -1,4 +1,4 @@
-Erkannte Felder (2026-07-13):
+Erkannte Felder (2026-07-14):
 idProduct
 idCategory
 avg
