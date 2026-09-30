@@ -1,4 +1,4 @@
-Erkannte Felder (2026-09-29):
+Erkannte Felder (2026-09-30):
 idProduct
 name
 idCategory
